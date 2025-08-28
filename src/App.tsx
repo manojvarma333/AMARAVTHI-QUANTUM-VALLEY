@@ -9,6 +9,8 @@ import { JobTargetChart } from './components/JobTargetChart';
 import { JobTimelineChart } from './components/JobTimelineChart';
 import { ExecutionTimeChart } from './components/ExecutionTimeChart';
 import { ShotsDistributionChart } from './components/ShotsDistributionChart';
+import { estimateWaitTimesByBackend, recommendBackends, detectAnomalies } from './utils/analytics';
+import { BackendRecommendationChart } from './components/BackendRecommendationChart';
 
 export default function App() {
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -125,6 +127,20 @@ export default function App() {
     });
   }, [filteredJobs, sortField, sortDirection]);
 
+  // Limit insights to the selected backend type (if not All)
+  const candidateJobs = React.useMemo(() => {
+    if (backendTypeFilter === 'All') return filteredJobs;
+    return filteredJobs.filter(j => (j.backend_type || 'Unknown') === backendTypeFilter);
+  }, [filteredJobs, backendTypeFilter]);
+
+  // Insights based on candidate jobs (scoped to backend type)
+  const insights = React.useMemo(() => {
+    const wait = estimateWaitTimesByBackend(candidateJobs);
+    const recs = recommendBackends(candidateJobs);
+    const anomalies = detectAnomalies(candidateJobs);
+    return { wait, recs, anomalies };
+  }, [candidateJobs]);
+
   // Calculate stats (use filteredJobs)
   const stats = React.useMemo(() => {
     return filteredJobs.reduce(
@@ -212,6 +228,62 @@ export default function App() {
         {/* Stats Cards */}
         <div className="px-4 sm:px-0">
           <StatsCards stats={stats} totalJobs={filteredJobs.length} />
+        </div>
+
+        {/* Insights Row */}
+        <div className="px-4 sm:px-0">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="rounded-xl border border-gray-200 bg-green-50 p-4">
+              <p className="text-sm font-medium text-green-700">Estimated Wait</p>
+              <p className="mt-1 text-2xl font-semibold text-gray-900">
+                {(() => {
+                  const rec = insights.recs[0];
+                  const backend = rec?.backend;
+                  const est = backend ? insights.wait[backend] : undefined;
+                  return est ? `${Math.round(est.mean)}s (p90 ${Math.round(est.p90)}s)` : 'N/A';
+                })()}
+              </p>
+              <p className="text-xs text-gray-600 mt-1">
+                {(() => {
+                  const rec = insights.recs[0];
+                  if (!rec) return backendTypeFilter === 'All' ? 'Based on historical queue times' : `No data for ${backendTypeFilter}`;
+                  const bt = candidateJobs.find(j => (j.backend || 'Unknown') === rec.backend)?.backend_type || 'Unknown';
+                  const btSuffix = backendTypeFilter === 'All' ? '' : ` in ${backendTypeFilter}`;
+                  return `For ${rec.backend} (${bt})${btSuffix}`;
+                })()}
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-gray-200 bg-blue-50 p-4">
+              <p className="text-sm font-medium text-blue-700">Top Backend Recommendation</p>
+              <p className="mt-1 text-2xl font-semibold text-gray-900">
+                {(() => {
+                  const rec = insights.recs[0];
+                  if (!rec) return 'N/A';
+                  const bt = candidateJobs.find(j => (j.backend || 'Unknown') === rec.backend)?.backend_type || 'Unknown';
+                  return `${rec.backend} (${bt})`;
+                })()}
+              </p>
+              <p className="text-xs text-gray-600 mt-1">
+                {insights.recs[0] ? insights.recs[0].reasons.join(' • ') : (backendTypeFilter === 'All' ? 'Not enough data' : `Not enough data for ${backendTypeFilter}`)}
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-gray-200 bg-rose-50 p-4">
+              <p className="text-sm font-medium text-rose-700">Anomalies Detected</p>
+              <p className="mt-1 text-2xl font-semibold text-gray-900">{insights.anomalies.length}</p>
+              <p className="text-xs text-gray-600 mt-1">Stuck queues or failure clusters</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Why it's best: comparison chart */}
+        <div className="px-4 sm:px-0">
+          <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+            <h3 className="text-sm font-semibold text-gray-800 mb-2">Backend Comparison{backendTypeFilter !== 'All' ? ` — ${backendTypeFilter}` : ''}</h3>
+            <p className="text-xs text-gray-600 mb-3">Score combines success rate, queue time, and execution time.</p>
+            <BackendRecommendationChart jobs={candidateJobs} />
+          </div>
         </div>
 
         {/* Filters Row */}
